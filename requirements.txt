@@ -1,0 +1,4 @@
+flask
+yt-dlp
+# ffmpeg is also needed (external program, not a pip package) when a video has to be merged from separate
+# audio/video streams. Install it and put it on PATH:  winget install Gyan.FFmpeg  (many clips work without it).

@@ -1,0 +1,31 @@
+# MIDIfy
+
+A small **local** tool that turns audio into **MIDI**. Paste a **YouTube link** (or open an audio file) and it
+transcribes the notes to a `.mid` you can open in any DAW or notation editor. Also the "Audio → MIDI" option on
+the `music.anjanm.com` hub — that in-app version does **file → MIDI** in your browser; this local app adds the
+**YouTube → MIDI** path (it has to download the audio first, which a web page can't do).
+
+Transcription runs with Spotify's open-source **Basic Pitch**, right in your browser. Nothing is uploaded; any
+audio it downloads stays in a local `cache/` folder.
+
+## Requirements
+- **Windows 10 / 11.**
+- **Python 3.9 or newer** (3.10+ recommended) — from <https://www.python.org/downloads/>, tick **"Add Python to PATH"**.
+  `run.bat` installs everything else.
+- An **internet connection** (to fetch the video, load the model, and install the two Python packages first run).
+- A modern browser — **Chrome or Edge**.
+- *(Optional)* **ffmpeg** on PATH — only for the odd clip whose audio comes as a separate stream (`winget install Gyan.FFmpeg`).
+
+## Run it
+1. Download this repo (green **Code ▾ → Download ZIP**, then unzip) — or `git clone` it.
+2. Double-click **`run.bat`**. First launch installs `flask` + `yt-dlp` and opens <http://127.0.0.1:8610>.
+3. Paste a YouTube link → **Transcribe** (or **choose an audio file**) → **Download .mid**.
+   The **onset / confidence / min-length** sliders tune how many notes it picks up.
+
+## Notes
+- Best on **vocals or a single instrument**; dense full mixes come out messier — that's inherent to audio transcription.
+- First run downloads the Basic Pitch model (a few seconds) and warms up; a long song takes a while.
+- **Personal tool.** Downloading from YouTube is against YouTube's Terms of Service and the music is copyrighted — a
+  MIDI transcription still reproduces the *composition*, so this is for personal practice/study, your call. Kept local
+  on purpose (YouTube blocks cloud IPs anyway).
+- Shares its YouTube extractor (`yt_extract.py`) with the KaraoKey tool — same code, two separate apps.

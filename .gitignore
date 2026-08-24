@@ -1,0 +1,7 @@
+# Downloaded audio — NEVER commit (copyrighted, throwaway cache)
+cache/
+
+# Python
+__pycache__/
+*.pyc
+.venv/

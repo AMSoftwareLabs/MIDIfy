@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MIDIfy — Audio → MIDI</title>
+<style>
+  :root{--bg:#0e1116;--panel:#171b22;--panel2:#1e242d;--line:#2a313c;--text:#e6e9ee;--dim:#9aa4b2;--accent:#6ea8fe;--accent2:#7ee0c0}
+  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,Segoe UI,Roboto,sans-serif}
+  .wrap{max-width:760px;margin:0 auto;padding:18px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:19px;margin-bottom:10px}
+  .brand .dot{width:11px;height:11px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent2))}
+  .player{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  input[type=text]{flex:1;min-width:200px;background:#0d1015;border:1px solid var(--line);color:var(--text);border-radius:10px;padding:11px 13px}
+  button{background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:10px;padding:10px 15px;cursor:pointer}
+  button:hover{border-color:var(--accent)} button:disabled{opacity:.45;cursor:not-allowed}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#0b1220;font-weight:700}
+  .filebtn{color:var(--dim)} .filebtn input{display:none}
+  .webnote{background:rgba(110,168,254,.10);border:1px solid rgba(110,168,254,.45);border-radius:12px;padding:12px 14px;margin-bottom:14px;font-size:14px}
+  .status{color:var(--dim);font-size:13px;margin:12px 2px 0;min-height:18px}
+  .bar{height:6px;background:#0d1015;border:1px solid var(--line);border-radius:4px;overflow:hidden;margin-top:10px}
+  .bar>i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--accent2));transition:width .2s}
+  .knobs{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-top:14px}
+  @media(max-width:560px){.knobs{grid-template-columns:1fr}}
+  .knob{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:12px}
+  .knob label{display:flex;justify-content:space-between;font-size:13px;color:var(--dim);margin-bottom:8px}
+  .knob .val{color:var(--accent2);font-weight:700} input[type=range]{width:100%;accent-color:var(--accent)}
+  .result{margin-top:16px;padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--panel2);display:none}
+  .result.show{display:block} .result b{color:var(--accent2)}
+  .foot{color:var(--dim);font-size:12px;margin-top:16px;line-height:1.6} a{color:var(--accent)}
+</style></head>
+<body>
+<div class="wrap">
+  <div class="brand" id="brand" hidden><span class="dot"></span> MIDIfy <span style="color:var(--dim);font-weight:400;font-size:14px">· audio → MIDI</span></div>
+  <div class="player">
+    <div class="webnote" id="webnote" hidden>
+      🎼 <b>File → MIDI works right here</b> — choose an audio file to transcribe it. <b>YouTube → MIDI</b> isn't part of
+      this in-app tool (a web page can't download a video), and the MIDI app has no downloader even on your PC — that
+      lives in the separate <b>MIDIfy</b> local app. <span id="ytdl"></span>
+    </div>
+    <div class="row">
+      <input type="text" id="url" placeholder="Paste a YouTube link" autocomplete="off">
+      <button class="primary" id="go" disabled>Transcribe</button>
+      <label class="filebtn">or <u>choose an audio file</u><input type="file" id="file" accept="audio/*,video/*"></label>
+    </div>
+    <div class="status" id="status">Choose an audio file (mp3/wav/m4a…) to transcribe it to MIDI.</div>
+    <div class="bar"><i id="pbar"></i></div>
+
+    <div class="knobs">
+      <div class="knob"><label>Note onset <span class="val" id="onv">0.50</span></label>
+        <input id="onset" type="range" min="0.05" max="0.9" step="0.05" value="0.5"></div>
+      <div class="knob"><label>Note confidence <span class="val" id="frv">0.30</span></label>
+        <input id="frame" type="range" min="0.05" max="0.9" step="0.05" value="0.3"></div>
+      <div class="knob"><label>Min length (ms) <span class="val" id="mlv">110</span></label>
+        <input id="minlen" type="range" min="30" max="400" step="10" value="110"></div>
+    </div>
+
+    <div class="result" id="result">
+      Transcribed <b id="rcount">0</b> notes. <button class="primary" id="dl">⬇ Download .mid</button>
+      <span class="foot">Then open it in the MIDI editor via <b>File ▸ Open</b>.</span>
+    </div>
+
+    <p class="foot">
+      Powered by Spotify's open-source <b>Basic Pitch</b>, running entirely in your browser. Best on vocals or a single
+      instrument; dense full mixes come out messier — that's inherent to audio transcription. First run loads the model
+      (a few seconds), and a long song can take a while.
+    </p>
+  </div>
+</div>
+<script type="module">
+import { BasicPitch, noteFramesToTime, addPitchBendsToNoteEvents, outputToNotesPoly } from 'https://cdn.jsdelivr.net/npm/@spotify/basic-pitch/+esm';
+import { Midi } from 'https://cdn.jsdelivr.net/npm/@tonejs/midi/+esm';
+
+const $=s=>document.querySelector(s);
+const MODEL='https://cdn.jsdelivr.net/npm/@spotify/basic-pitch/model/model.json';
+let bp=null, lastMidiBlob=null, lastName='transcription';
+const status=m=>$('#status').textContent=m;
+const setBar=p=>$('#pbar').style.width=Math.round((p||0)*100)+'%';
+
+$('#onset').oninput=e=>$('#onv').textContent=(+e.target.value).toFixed(2);
+$('#frame').oninput=e=>$('#frv').textContent=(+e.target.value).toFixed(2);
+$('#minlen').oninput=e=>$('#mlv').textContent=e.target.value;
+
+$('#file').onchange=e=>{ const f=e.target.files[0]; if(f){ lastName=clean(f.name.replace(/\.[^.]+$/,'')); transcribe(f); } };
+$('#dl').onclick=()=>{ if(!lastMidiBlob) return; const a=document.createElement('a'); a.href=URL.createObjectURL(lastMidiBlob); a.download=lastName+'.mid'; a.click(); };
+$('#go').onclick=fromYouTube;
+$('#url').addEventListener('keydown',e=>{ if(e.key==='Enter' && !$('#go').disabled) fromYouTube(); });
+const clean=s=>(s||'transcription').replace(/[^\w\- ]/g,'').trim().slice(0,60)||'transcription';
+
+async function fromYouTube(){
+  const url=$('#url').value.trim(); if(!url) return;
+  status('Fetching audio from YouTube… (first time for a clip takes a few seconds)');
+  let data;
+  try{ const r=await fetch('/api/extract?url='+encodeURIComponent(url)); data=await r.json(); if(!r.ok) throw new Error(data.error||'extract failed'); }
+  catch(e){ status('❌ '+e.message); return; }
+  lastName=clean(data.title);
+  try{ const blob=await (await fetch(data.audioUrl)).blob(); transcribe(new File([blob],'yt',{type:blob.type||'audio/mp4'})); }
+  catch(e){ status('❌ Could not load the downloaded audio: '+e.message); }
+}
+
+async function transcribe(file){
+  $('#result').classList.remove('show'); setBar(0);
+  try{
+    status('Decoding audio…');
+    const actx=new (window.AudioContext||window.webkitAudioContext)();
+    const decoded=await actx.decodeAudioData(await file.arrayBuffer());
+    const off=new OfflineAudioContext(1, Math.max(1,Math.ceil(decoded.duration*22050)), 22050);   // Basic Pitch wants 22050 mono
+    const src=off.createBufferSource(); src.buffer=decoded; src.connect(off.destination); src.start();
+    const mono=await off.startRendering();
+    status('Loading model…'); if(!bp) bp=new BasicPitch(MODEL);
+    status('Transcribing… (first run warms up the model)');
+    const frames=[],onsets=[],contours=[];
+    await bp.evaluateModel(mono, (f,o,c)=>{frames.push(...f);onsets.push(...o);contours.push(...c);}, p=>setBar(p));
+    const notes=noteFramesToTime(addPitchBendsToNoteEvents(contours,
+      outputToNotesPoly(frames, onsets, +$('#onset').value, +$('#frame').value, Math.round(+$('#minlen').value/1000*(22050/256)))));
+    lastMidiBlob=notesToMidi(notes);
+    $('#rcount').textContent=notes.length; $('#result').classList.add('show');
+    status(`Done — ${notes.length} notes. Download the .mid below.`); setBar(1);
+  }catch(e){ status('❌ '+e.message); }
+}
+
+function notesToMidi(notes){
+  const midi=new Midi(); const tr=midi.addTrack();
+  for(const n of notes) tr.addNote({ midi:n.pitchMidi, time:n.startTimeSeconds,
+    duration:Math.max(0.05,n.durationSeconds), velocity:Math.max(0.1,Math.min(1,n.amplitude||0.7)) });
+  return new Blob([midi.toArray()],{type:'audio/midi'});
+}
+
+// Local (MIDIfy app) vs in-app/web: only the local app has the /api/extract downloader → enable the YouTube box there.
+(async()=>{
+  let local=false;
+  try{ const r=await fetch('/api/health',{cache:'no-store'}); if(r.ok){ const j=await r.json().catch(()=>null); local=!!(j&&j.ok); } }catch(e){}
+  if(local){ $('#webnote').hidden=true; $('#brand').hidden=false; $('#go').disabled=false; $('#url').disabled=false; }
+  else{ $('#webnote').hidden=false; $('#go').disabled=true; $('#url').disabled=true; $('#url').placeholder='YouTube → MIDI runs in the MIDIfy local app — upload a file here'; }
+})();
+</script>
+</body></html>
