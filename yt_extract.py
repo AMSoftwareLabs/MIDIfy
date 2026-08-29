@@ -23,9 +23,12 @@ _FMT = {
 }
 
 
-def _client(names):
-    """A yt-dlp opts fragment pinning the YouTube player client(s) to try."""
-    return {"extractor_args": {"youtube": {"player_client": list(names)}}}
+def _client(names, formats=None):
+    """A yt-dlp opts fragment pinning the YouTube player client(s) — and optionally which formats to keep."""
+    ya = {"player_client": list(names)}
+    if formats:
+        ya["formats"] = list(formats)   # e.g. 'missing_pot' keeps streams YouTube gated behind a PO token
+    return {"extractor_args": {"youtube": ya}}
 
 
 # No-cookie fallbacks, in order. 'tv' is currently the most bot-resistant client that needs no login;
@@ -40,9 +43,11 @@ _ATTEMPTS = [
     {"cookiesfrombrowser": ("edge",)},
     {},
 ]
-# When a cookies.txt is present it's paired with each of these clients (tried before the list above).
-# mweb + fresh cookies is historically the most reliable way past the bot check; tv rarely needs cookies.
-_COOKIE_CLIENTS = (["mweb"], ["web_safari"], ["default"], ["tv"])
+# When a cookies.txt is present it's paired with each of these clients (tried before the list above), and with
+# formats='missing_pot' so streams YouTube gates behind a PO token aren't silently dropped — that drop is what
+# surfaces as "Requested format is not available" even though the login worked. The android/ios/android_vr
+# clients still hand back plain (non-SABR, non-gated) streams, so they're the best bet once cookies get us in.
+_COOKIE_CLIENTS = (["android_vr"], ["android"], ["ios"], ["tv"], ["mweb"], ["web_safari"], ["default"])
 
 
 def is_youtube(url):
@@ -95,7 +100,7 @@ def extract(url, cache_dir, kind="audio"):
     if have_cookies:
         print("[yt] using cookies.txt from %s" % cookiefile, file=sys.stderr)
         for clients in _COOKIE_CLIENTS:
-            a = _client(clients)
+            a = _client(clients, formats=["missing_pot"])
             a["cookiefile"] = cookiefile
             attempts.append(a)
     attempts += _ATTEMPTS

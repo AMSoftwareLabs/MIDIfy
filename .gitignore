@@ -4,6 +4,9 @@ cache/
 # Your exported YouTube cookies — NEVER commit (it's your login session)
 cookies.txt
 
+# Local throwaway diagnostic (not part of the app)
+diag_youtube.py
+
 # Python
 __pycache__/
 *.pyc
