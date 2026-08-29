@@ -8,31 +8,57 @@ tool is a self-contained download, this file is copied into both repos — keep 
     info = extract(url, CACHE_DIR, kind="audio")   # KaraoKey uses kind="video" (for the lyrics)
     # -> {"path": <downloaded file>, "title": str, "duration": int, "id": str}
 
-YouTube rejects the default 'web' player client for some videos ("page needs to be reloaded"), so extract()
-retries across resilient clients and then your browser cookies (for age/sign-in-gated clips). Keeping yt-dlp
-updated (run.bat force-updates it every launch) is the other half of surviving YouTube's constant changes.
+YouTube's "Sign in to confirm you're not a bot" wall is the hard part. Two things beat it: keeping yt-dlp
+current (run.bat force-updates it every launch) and, crucially, *pairing your cookies with a player client
+that YouTube isn't currently challenging* — cookies on the default 'web' client often still get blocked. So
+extract() tries a cookies.txt (dropped in the app folder) across several clients before falling back to
+browser cookies and plain clients. Each attempt is printed to the console so you can see what got through.
 """
-import os, re
+import os, re, sys
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")     # strip yt-dlp's coloured error text before showing it
 _FMT = {
     "audio": "bestaudio[ext=m4a]/bestaudio/best",                                    # m4a/AAC decodes in the browser
     "video": "best[ext=mp4][height<=720]/bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
 }
-# Tried in order until one works: non-web player clients, then browser cookies, then plain default. A
-# cookies.txt in the app folder (if present) is tried FIRST — see extract().
+
+
+def _client(names):
+    """A yt-dlp opts fragment pinning the YouTube player client(s) to try."""
+    return {"extractor_args": {"youtube": {"player_client": list(names)}}}
+
+
+# No-cookie fallbacks, in order. 'tv' is currently the most bot-resistant client that needs no login;
+# android/ios sometimes slip through age checks; browser-cookie reads are a last resort (Chrome/Edge are
+# often unreadable on recent Windows because they're encrypted — Firefox reads reliably).
 _ATTEMPTS = [
-    {"extractor_args": {"youtube": {"player_client": ["tv", "android", "ios"]}}},
-    {"extractor_args": {"youtube": {"player_client": ["default", "-web"]}}},
-    {"cookiesfrombrowser": ("firefox",)},     # Firefox cookies read reliably on Windows
-    {"cookiesfrombrowser": ("chrome",)},      # Chrome/Edge cookies are often unreadable on recent Windows (encrypted)
+    _client(["tv"]),
+    _client(["tv", "android", "ios"]),
+    _client(["default", "-web"]),
+    {"cookiesfrombrowser": ("firefox",)},
+    {"cookiesfrombrowser": ("chrome",)},
     {"cookiesfrombrowser": ("edge",)},
     {},
 ]
+# When a cookies.txt is present it's paired with each of these clients (tried before the list above).
+# mweb + fresh cookies is historically the most reliable way past the bot check; tv rarely needs cookies.
+_COOKIE_CLIENTS = (["mweb"], ["web_safari"], ["default"], ["tv"])
 
 
 def is_youtube(url):
     return bool(re.search(r"(?:youtube\.com/|youtu\.be/|music\.youtube\.com/)", url or "", re.I))
+
+
+def _label(extra):
+    """Short human tag for an attempt, for the console log."""
+    pc = extra.get("extractor_args", {}).get("youtube", {}).get("player_client")
+    if "cookiefile" in extra:
+        ck = "cookies.txt"
+    elif "cookiesfrombrowser" in extra:
+        ck = "browser:%s" % extra["cookiesfrombrowser"][0]
+    else:
+        ck = "no-cookies"
+    return "client=%s %s" % (",".join(pc) if pc else "default", ck)
 
 
 def _once(url, cache_dir, kind, extra):
@@ -60,22 +86,39 @@ def extract(url, cache_dir, kind="audio"):
         import yt_dlp  # noqa: F401
     except ImportError:
         raise RuntimeError("yt-dlp is not installed (run.bat installs it).")
-    # A cookies.txt sitting in the app folder (next to cache/) is the most reliable auth — tried first.
-    attempts = list(_ATTEMPTS)
+
+    # A cookies.txt sitting in the app folder (next to cache/) is the most reliable auth. Pair it with each
+    # client YouTube tolerates and try those FIRST, then the no-cookie fallbacks.
     cookiefile = os.path.join(os.path.dirname(os.path.abspath(cache_dir)), "cookies.txt")
-    if os.path.exists(cookiefile):
-        attempts = [{"cookiefile": cookiefile}] + attempts
+    attempts = []
+    have_cookies = os.path.exists(cookiefile)
+    if have_cookies:
+        print("[yt] using cookies.txt from %s" % cookiefile, file=sys.stderr)
+        for clients in _COOKIE_CLIENTS:
+            a = _client(clients)
+            a["cookiefile"] = cookiefile
+            attempts.append(a)
+    attempts += _ATTEMPTS
+
     last = ""
     for extra in attempts:
         try:
+            print("[yt] trying %s ..." % _label(extra), file=sys.stderr)
             info, path = _once(url, cache_dir, kind, extra)
+            print("[yt] OK via %s" % _label(extra), file=sys.stderr)
             return {"path": path, "title": info.get("title") or "Untitled",
                     "duration": info.get("duration") or 0, "id": info.get("id") or ""}
         except Exception as e:
             s = _ANSI.sub("", str(e)).strip()
             last = s.splitlines()[-1] if s else ""
+
     msg = last or "extraction failed"
     if "not a bot" in msg.lower() or "sign in to confirm" in msg.lower():
-        msg += ("  —  YouTube wants a login. Export a cookies.txt from a signed-in YouTube (browser extension "
-                '"Get cookies.txt LOCALLY") and drop it in the app folder, next to run.bat. See the README.')
+        if have_cookies:
+            msg += ("  —  Even with your cookies.txt YouTube blocked this. The cookies are likely stale: "
+                    "re-export a fresh cookies.txt from a signed-in YouTube (open an incognito/private window, "
+                    "sign in, export, then CLOSE that window so the session stays valid) and replace the file.")
+        else:
+            msg += ('  —  YouTube wants a login. Export a cookies.txt from a signed-in YouTube (browser extension '
+                    '"Get cookies.txt LOCALLY") and drop it in the app folder, next to run.bat. See the README.')
     raise RuntimeError(msg)
