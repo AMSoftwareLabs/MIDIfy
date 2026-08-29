@@ -1,6 +1,9 @@
 # Downloaded audio — NEVER commit (copyrighted, throwaway cache)
 cache/
 
+# Your exported YouTube cookies — NEVER commit (it's your login session)
+cookies.txt
+
 # Python
 __pycache__/
 *.pyc

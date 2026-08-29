@@ -22,6 +22,15 @@ audio it downloads stays in a local `cache/` folder.
 3. Paste a YouTube link → **Transcribe** (or **choose an audio file**) → **Download .mid**.
    The **onset / confidence / min-length** sliders tune how many notes it picks up.
 
+## If YouTube says "confirm you're not a bot"
+YouTube sometimes demands a login. Give it your cookies:
+1. Install the browser extension **"Get cookies.txt LOCALLY"** (Chrome/Edge/Firefox).
+2. Open **youtube.com** while **signed in**, click the extension → **Export**, and save the file as **`cookies.txt`**.
+3. Put `cookies.txt` in this app's folder (next to `run.bat`), then try the link again.
+
+The app also tries your Firefox/Chrome/Edge cookies automatically, but recent Windows encrypts Chrome/Edge
+cookies so a `cookies.txt` is the reliable route. It's git-ignored — it's your login, never share it.
+
 ## Notes
 - Best on **vocals or a single instrument**; dense full mixes come out messier — that's inherent to audio transcription.
 - First run downloads the Basic Pitch model (a few seconds) and warms up; a long song takes a while.

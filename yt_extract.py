@@ -19,11 +19,13 @@ _FMT = {
     "audio": "bestaudio[ext=m4a]/bestaudio/best",                                    # m4a/AAC decodes in the browser
     "video": "best[ext=mp4][height<=720]/bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
 }
-# Tried in order until one works: non-web player clients, then browser cookies, then plain default.
+# Tried in order until one works: non-web player clients, then browser cookies, then plain default. A
+# cookies.txt in the app folder (if present) is tried FIRST — see extract().
 _ATTEMPTS = [
     {"extractor_args": {"youtube": {"player_client": ["tv", "android", "ios"]}}},
     {"extractor_args": {"youtube": {"player_client": ["default", "-web"]}}},
-    {"cookiesfrombrowser": ("chrome",)},
+    {"cookiesfrombrowser": ("firefox",)},     # Firefox cookies read reliably on Windows
+    {"cookiesfrombrowser": ("chrome",)},      # Chrome/Edge cookies are often unreadable on recent Windows (encrypted)
     {"cookiesfrombrowser": ("edge",)},
     {},
 ]
@@ -58,8 +60,13 @@ def extract(url, cache_dir, kind="audio"):
         import yt_dlp  # noqa: F401
     except ImportError:
         raise RuntimeError("yt-dlp is not installed (run.bat installs it).")
+    # A cookies.txt sitting in the app folder (next to cache/) is the most reliable auth — tried first.
+    attempts = list(_ATTEMPTS)
+    cookiefile = os.path.join(os.path.dirname(os.path.abspath(cache_dir)), "cookies.txt")
+    if os.path.exists(cookiefile):
+        attempts = [{"cookiefile": cookiefile}] + attempts
     last = ""
-    for extra in _ATTEMPTS:
+    for extra in attempts:
         try:
             info, path = _once(url, cache_dir, kind, extra)
             return {"path": path, "title": info.get("title") or "Untitled",
@@ -67,4 +74,8 @@ def extract(url, cache_dir, kind="audio"):
         except Exception as e:
             s = _ANSI.sub("", str(e)).strip()
             last = s.splitlines()[-1] if s else ""
-    raise RuntimeError(last or "extraction failed")
+    msg = last or "extraction failed"
+    if "not a bot" in msg.lower() or "sign in to confirm" in msg.lower():
+        msg += ("  —  YouTube wants a login. Export a cookies.txt from a signed-in YouTube (browser extension "
+                '"Get cookies.txt LOCALLY") and drop it in the app folder, next to run.bat. See the README.')
+    raise RuntimeError(msg)
