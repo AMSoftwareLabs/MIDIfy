@@ -31,6 +31,14 @@ YouTube sometimes demands a login. Give it your cookies:
 The app also tries your Firefox/Chrome/Edge cookies automatically, but recent Windows encrypts Chrome/Edge
 cookies so a `cookies.txt` is the reliable route. It's git-ignored — it's your login, never share it.
 
+## If YouTube says "Requested format is not available"
+Different wall: that video's audio is gated behind a **PO token** (common on YouTube Music "- Topic" tracks).
+Install the one-time helper — needs **Node.js 20+**:
+1. Install Node.js if you don't have it: <https://nodejs.org/> (LTS), or `winget install OpenJS.NodeJS.LTS`.
+2. Double-click **`setup_potoken.bat`**. It installs the yt-dlp plugin and builds the token generator at
+   `%USERPROFILE%\bgutil-ytdlp-pot-provider`, then smoke-tests it.
+3. Retry the link — yt-dlp finds and uses the helper automatically (no window to keep open, no config).
+
 ## Notes
 - Best on **vocals or a single instrument**; dense full mixes come out messier — that's inherent to audio transcription.
 - First run downloads the Basic Pitch model (a few seconds) and warms up; a long song takes a while.

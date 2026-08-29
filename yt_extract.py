@@ -118,7 +118,8 @@ def extract(url, cache_dir, kind="audio"):
             last = s.splitlines()[-1] if s else ""
 
     msg = last or "extraction failed"
-    if "not a bot" in msg.lower() or "sign in to confirm" in msg.lower():
+    low = msg.lower()
+    if "not a bot" in low or "sign in to confirm" in low:
         if have_cookies:
             msg += ("  —  Even with your cookies.txt YouTube blocked this. The cookies are likely stale: "
                     "re-export a fresh cookies.txt from a signed-in YouTube (open an incognito/private window, "
@@ -126,4 +127,8 @@ def extract(url, cache_dir, kind="audio"):
         else:
             msg += ('  —  YouTube wants a login. Export a cookies.txt from a signed-in YouTube (browser extension '
                     '"Get cookies.txt LOCALLY") and drop it in the app folder, next to run.bat. See the README.')
+    elif "requested format is not available" in low:
+        msg += ("  —  YouTube gated this video's audio behind a PO token. Run setup_potoken.bat once (needs "
+                "Node.js) to install the token helper, then retry. If it's already set up, this upload may be "
+                "region/age-locked — try a different one.")
     raise RuntimeError(msg)

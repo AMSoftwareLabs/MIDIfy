@@ -1,4 +1,8 @@
 flask
 yt-dlp
+# PO-token helper - gets yt-dlp past YouTube's "Requested format is not available" wall on gated videos.
+# The pip plugin below is only half of it: it also needs Node.js plus the built provider living at
+# ~/bgutil-ytdlp-pot-provider. Run  setup_potoken.bat  (in this folder) ONCE to install/build that half.
+bgutil-ytdlp-pot-provider
 # ffmpeg is also needed (external program, not a pip package) when a video has to be merged from separate
 # audio/video streams. Install it and put it on PATH:  winget install Gyan.FFmpeg  (many clips work without it).
