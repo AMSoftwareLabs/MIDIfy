@@ -4,7 +4,7 @@
 <style>
   :root{--bg:#0e1116;--panel:#171b22;--panel2:#1e242d;--line:#2a313c;--text:#e6e9ee;--dim:#9aa4b2;--accent:#6ea8fe;--accent2:#7ee0c0}
   *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,Segoe UI,Roboto,sans-serif}
-  .wrap{max-width:760px;margin:0 auto;padding:18px}
+  .wrap{max-width:820px;margin:0 auto;padding:18px}
   .brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:19px;margin-bottom:10px}
   .brand .dot{width:11px;height:11px;border-radius:50%;background:linear-gradient(135deg,var(--accent),var(--accent2))}
   .player{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px}
@@ -13,10 +13,16 @@
   button{background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:10px;padding:10px 15px;cursor:pointer}
   button:hover{border-color:var(--accent)} button:disabled{opacity:.45;cursor:not-allowed}
   button.primary{background:var(--accent);border-color:var(--accent);color:#0b1220;font-weight:700}
+  button.toggle.on{background:var(--accent2);border-color:var(--accent2);color:#0b1220;font-weight:700}
   .filebtn{color:var(--dim)} .filebtn input{display:none}
   .webnote{background:rgba(110,168,254,.10);border:1px solid rgba(110,168,254,.45);border-radius:12px;padding:12px 14px;margin-bottom:14px;font-size:14px}
   .status{color:var(--dim);font-size:13px;margin:12px 2px 0;min-height:18px}
-  .bar{height:6px;background:#0d1015;border:1px solid var(--line);border-radius:4px;overflow:hidden;margin-top:10px}
+  .lbl{color:var(--dim);font-size:13px} .mini{flex:0 0 auto;width:96px;min-width:0}
+  #preview{margin-top:14px} #preview[hidden]{display:none}
+  canvas#wave{width:100%;height:130px;display:block;border:1px solid var(--line);border-radius:10px;background:#0d1015;cursor:crosshair;touch-action:none}
+  .transport{display:flex;gap:10px;align-items:center;margin:12px 0 4px;flex-wrap:wrap}
+  .time{color:var(--dim);font-variant-numeric:tabular-nums;font-size:13px;margin-left:auto}
+  .bar{height:6px;background:#0d1015;border:1px solid var(--line);border-radius:4px;overflow:hidden;margin-top:12px}
   .bar>i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--accent2));transition:width .2s}
   .knobs{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-top:14px}
   @media(max-width:560px){.knobs{grid-template-columns:1fr}}
@@ -38,10 +44,28 @@
     </div>
     <div class="row">
       <input type="text" id="url" placeholder="Paste a YouTube link" autocomplete="off">
-      <button class="primary" id="go" disabled>Transcribe</button>
+      <button class="primary" id="load" disabled>Load</button>
       <label class="filebtn">or <u>choose an audio file</u><input type="file" id="file" accept="audio/*,video/*"></label>
     </div>
-    <div class="status" id="status">Choose an audio file (mp3/wav/m4a…) to transcribe it to MIDI.</div>
+    <div class="status" id="status">Load an audio file (or YouTube link) — then preview it and pick the part to transcribe.</div>
+
+    <!-- preview: waveform + player + range, shown once a clip is loaded -->
+    <div id="preview" hidden>
+      <canvas id="wave" width="760" height="130"></canvas>
+      <div class="transport">
+        <button id="play">▶ Play</button>
+        <button id="playsel" title="Play just the selected range">▶ Selection</button>
+        <button id="loop" class="toggle" title="Loop the selection">🔁 Loop</button>
+        <span class="lbl">Range</span>
+        <input type="text" id="from" class="mini" placeholder="from m:ss">
+        <span class="lbl">→</span>
+        <input type="text" id="to" class="mini" placeholder="to m:ss">
+        <button id="whole" title="Select the whole clip">whole</button>
+        <span class="time"><span id="cur">0:00</span> / <span id="dur">0:00</span></span>
+      </div>
+      <button class="primary" id="go" style="margin-top:6px">🎼 Transcribe selection → MIDI</button>
+    </div>
+
     <div class="bar"><i id="pbar"></i></div>
 
     <div class="knobs">
@@ -60,8 +84,8 @@
 
     <p class="foot">
       Powered by Spotify's open-source <b>Basic Pitch</b>, running entirely in your browser. Best on vocals or a single
-      instrument; dense full mixes come out messier — that's inherent to audio transcription. First run loads the model
-      (a few seconds), and a long song can take a while.
+      instrument; dense full mixes come out messier. Drag the handles (or type the boxes) to pick a short, clean
+      section — it transcribes faster and better. First run loads the model (a few seconds).
     </p>
   </div>
 </div>
@@ -72,18 +96,21 @@ import { Midi } from 'https://cdn.jsdelivr.net/npm/@tonejs/midi/+esm';
 const $=s=>document.querySelector(s);
 const MODEL='https://cdn.jsdelivr.net/npm/@spotify/basic-pitch/model/model.json';
 let bp=null, lastMidiBlob=null, lastName='transcription';
+let decoded=null, audioEl=null, dur=0, from=0, to=0, drag=null, loopSel=false, raf=0;
 const status=m=>$('#status').textContent=m;
 const setBar=p=>$('#pbar').style.width=Math.round((p||0)*100)+'%';
+const clean=s=>(s||'transcription').replace(/[^\w\- ]/g,'').trim().slice(0,60)||'transcription';
+const fmtT=t=>{ t=Math.max(0,t||0); return Math.floor(t/60)+':'+String(Math.floor(t%60)).padStart(2,'0'); };
+const parseTime=s=>{ s=(s||'').trim(); if(!s) return null; if(s.includes(':')){ const p=s.split(':'); return (+p[0]||0)*60+(+p[1]||0); } return +s||0; };
 
 $('#onset').oninput=e=>$('#onv').textContent=(+e.target.value).toFixed(2);
 $('#frame').oninput=e=>$('#frv').textContent=(+e.target.value).toFixed(2);
 $('#minlen').oninput=e=>$('#mlv').textContent=e.target.value;
 
-$('#file').onchange=e=>{ const f=e.target.files[0]; if(f){ lastName=clean(f.name.replace(/\.[^.]+$/,'')); transcribe(f); } };
-$('#dl').onclick=()=>{ if(!lastMidiBlob) return; const a=document.createElement('a'); a.href=URL.createObjectURL(lastMidiBlob); a.download=lastName+'.mid'; a.click(); };
-$('#go').onclick=fromYouTube;
-$('#url').addEventListener('keydown',e=>{ if(e.key==='Enter' && !$('#go').disabled) fromYouTube(); });
-const clean=s=>(s||'transcription').replace(/[^\w\- ]/g,'').trim().slice(0,60)||'transcription';
+// ── loading (file or YouTube) → preview ────────────────────────────────────────
+$('#file').onchange=e=>{ const f=e.target.files[0]; if(f){ lastName=clean(f.name.replace(/\.[^.]+$/,'')); loadClip(f); } };
+$('#load').onclick=fromYouTube;
+$('#url').addEventListener('keydown',e=>{ if(e.key==='Enter' && !$('#load').disabled) fromYouTube(); });
 
 async function fromYouTube(){
   const url=$('#url').value.trim(); if(!url) return;
@@ -92,28 +119,103 @@ async function fromYouTube(){
   try{ const r=await fetch('/api/extract?url='+encodeURIComponent(url)); data=await r.json(); if(!r.ok) throw new Error(data.error||'extract failed'); }
   catch(e){ status('❌ '+e.message); return; }
   lastName=clean(data.title);
-  try{ const blob=await (await fetch(data.audioUrl)).blob(); transcribe(new File([blob],'yt',{type:blob.type||'audio/mp4'})); }
+  try{ const blob=await (await fetch(data.audioUrl)).blob(); loadClip(new File([blob],'yt',{type:blob.type||'audio/mp4'})); }
   catch(e){ status('❌ Could not load the downloaded audio: '+e.message); }
 }
 
-async function transcribe(file){
-  $('#result').classList.remove('show'); setBar(0);
+async function loadClip(file){
+  $('#result').classList.remove('show'); setBar(0); stopPlay();
+  status('Decoding…');
+  const url=URL.createObjectURL(file);
   try{
-    status('Decoding audio…');
-    const actx=new (window.AudioContext||window.webkitAudioContext)();
-    const decoded=await actx.decodeAudioData(await file.arrayBuffer());
-    const off=new OfflineAudioContext(1, Math.max(1,Math.ceil(decoded.duration*22050)), 22050);   // Basic Pitch wants 22050 mono
-    const src=off.createBufferSource(); src.buffer=decoded; src.connect(off.destination); src.start();
+    const ac=new (window.AudioContext||window.webkitAudioContext)();
+    decoded=await ac.decodeAudioData(await file.slice(0).arrayBuffer());
+  }catch(e){ status('❌ Could not decode that file (try Chrome/Edge): '+e.message); return; }
+  audioEl=new Audio(url); audioEl.preload='auto';
+  dur=decoded.duration; from=0; to=dur;
+  $('#dur').textContent=fmtT(dur); $('#cur').textContent='0:00';
+  $('#preview').hidden=false;
+  const cv=$('#wave'); cv.width=Math.max(320, cv.clientWidth||760);   // 1:1 pixels for clean mouse mapping
+  syncInputs(); drawWave();
+  status(`Loaded — ${fmtT(dur)}. Drag the handles (or type a range), press ▶ Selection to hear it, then Transcribe.`);
+}
+
+// ── waveform + range ───────────────────────────────────────────────────────────
+function drawWave(){
+  const cv=$('#wave'); if(!cv||!decoded) return;
+  const g=cv.getContext('2d'), W=cv.width, H=cv.height;
+  g.clearRect(0,0,W,H); g.fillStyle='#0d1015'; g.fillRect(0,0,W,H);
+  const fx=(from/dur)*W, tx=(to/dur)*W;
+  g.fillStyle='rgba(110,168,254,.16)'; g.fillRect(fx,0,tx-fx,H);         // selected region
+  const data=decoded.getChannelData(0), step=Math.max(1,Math.floor(data.length/W)), mid=H/2;
+  g.strokeStyle='#5b6673'; g.beginPath();
+  for(let x=0;x<W;x++){
+    let mn=1,mx=-1, s=x*step;
+    for(let i=0;i<step;i+=Math.max(1,step>>7)){ const v=data[s+i]; if(v<mn)mn=v; if(v>mx)mx=v; }
+    g.moveTo(x+.5, mid-(mx*mid)); g.lineTo(x+.5, mid-(mn*mid));
+  }
+  g.stroke();
+  g.fillStyle='#7ee0c0'; g.fillRect(fx-1,0,2,H); g.fillRect(tx-1,0,2,H); // handles
+  if(audioEl){ const px=(audioEl.currentTime/dur)*W; g.fillStyle='#fff'; g.fillRect(px,0,1,H); }
+}
+function syncInputs(){ $('#from').value=fmtT(from); $('#to').value=fmtT(to); }
+$('#from').onchange=()=>{ let t=parseTime($('#from').value); from=(t==null?0:Math.max(0,Math.min(t,to-0.05))); syncInputs(); drawWave(); };
+$('#to').onchange=()=>{ let t=parseTime($('#to').value); to=(t==null?dur:Math.min(dur,Math.max(t,from+0.05))); syncInputs(); drawWave(); };
+$('#whole').onclick=()=>{ from=0; to=dur; syncInputs(); drawWave(); };
+
+(function wireCanvas(){
+  const cv=$('#wave');
+  const xToT=cx=>{ const r=cv.getBoundingClientRect(); return Math.max(0,Math.min(dur,((cx-r.left)/r.width)*dur)); };
+  cv.addEventListener('mousedown', e=>{
+    if(!decoded) return;
+    const W=cv.getBoundingClientRect().width, fx=(from/dur)*W, tx=(to/dur)*W, x=e.offsetX;
+    if(Math.abs(x-fx)<9) drag='from'; else if(Math.abs(x-tx)<9) drag='to';
+    else { seekTo(xToT(e.clientX)); }
+  });
+  window.addEventListener('mousemove', e=>{
+    if(!drag||!decoded) return;
+    const t=xToT(e.clientX);
+    if(drag==='from') from=Math.max(0,Math.min(t,to-0.05));
+    else to=Math.min(dur,Math.max(t,from+0.05));
+    syncInputs(); drawWave();
+  });
+  window.addEventListener('mouseup', ()=>{ drag=null; });
+})();
+
+// ── playback ────────────────────────────────────────────────────────────────────
+function seekTo(t){ if(audioEl){ audioEl.currentTime=Math.max(0,Math.min(t,dur)); drawWave(); } }
+function tick(){ if(!audioEl) return; $('#cur').textContent=fmtT(audioEl.currentTime); drawWave();
+  if(audioEl._sel && audioEl.currentTime>=to){ if(loopSel){ audioEl.currentTime=from; } else { stopPlay(); return; } }
+  raf=requestAnimationFrame(tick);
+}
+function play(sel){ if(!audioEl) return; audioEl._sel=!!sel; if(sel) audioEl.currentTime=from;
+  audioEl.play(); $('#play').textContent='⏸ Pause'; cancelAnimationFrame(raf); tick(); }
+function stopPlay(){ if(audioEl){ audioEl.pause(); audioEl._sel=false; } $('#play') && ($('#play').textContent='▶ Play'); cancelAnimationFrame(raf); }
+$('#play').onclick=()=>{ if(!audioEl) return; if(audioEl.paused) play(false); else stopPlay(); };
+$('#playsel').onclick=()=>play(true);
+$('#loop').onclick=()=>{ loopSel=!loopSel; $('#loop').classList.toggle('on',loopSel); };
+
+// ── transcribe the selected range ────────────────────────────────────────────────
+$('#dl').onclick=()=>{ if(!lastMidiBlob) return; const a=document.createElement('a'); a.href=URL.createObjectURL(lastMidiBlob); a.download=lastName+'.mid'; a.click(); };
+$('#go').onclick=transcribe;
+
+async function transcribe(){
+  if(!decoded){ status('Load a clip first.'); return; }
+  stopPlay(); $('#result').classList.remove('show'); setBar(0);
+  try{
+    const secs=Math.max(0.05, to-from), ranged=(from>0||to<dur-0.01);
+    const off=new OfflineAudioContext(1, Math.max(1,Math.ceil(secs*22050)), 22050);   // render only [from,to] at 22050 mono
+    const src=off.createBufferSource(); src.buffer=decoded; src.connect(off.destination); src.start(0, from, secs);
     const mono=await off.startRendering();
     status('Loading model…'); if(!bp) bp=new BasicPitch(MODEL);
-    status('Transcribing… (first run warms up the model)');
+    status(ranged ? `Transcribing ${fmtT(from)}–${fmtT(to)}… (first run warms up the model)` : 'Transcribing… (first run warms up the model)');
     const frames=[],onsets=[],contours=[];
     await bp.evaluateModel(mono, (f,o,c)=>{frames.push(...f);onsets.push(...o);contours.push(...c);}, p=>setBar(p));
     const notes=noteFramesToTime(addPitchBendsToNoteEvents(contours,
       outputToNotesPoly(frames, onsets, +$('#onset').value, +$('#frame').value, Math.round(+$('#minlen').value/1000*(22050/256)))));
     lastMidiBlob=notesToMidi(notes);
     $('#rcount').textContent=notes.length; $('#result').classList.add('show');
-    status(`Done — ${notes.length} notes. Download the .mid below.`); setBar(1);
+    status(`Done — ${notes.length} notes${ranged?` from ${fmtT(from)}–${fmtT(to)}`:''}. Download the .mid below.`); setBar(1);
   }catch(e){ status('❌ '+e.message); }
 }
 
@@ -124,12 +226,12 @@ function notesToMidi(notes){
   return new Blob([midi.toArray()],{type:'audio/midi'});
 }
 
-// Local (MIDIfy app) vs in-app/web: only the local app has the /api/extract downloader → enable the YouTube box there.
+// Local (MIDIfy app) vs in-app/web: only the local app has /api/extract → enable the YouTube box there.
 (async()=>{
   let local=false;
   try{ const r=await fetch('/api/health',{cache:'no-store'}); if(r.ok){ const j=await r.json().catch(()=>null); local=!!(j&&j.ok); } }catch(e){}
-  if(local){ $('#webnote').hidden=true; $('#brand').hidden=false; $('#go').disabled=false; $('#url').disabled=false; }
-  else{ $('#webnote').hidden=false; $('#go').disabled=true; $('#url').disabled=true; $('#url').placeholder='YouTube → MIDI runs in the MIDIfy local app — upload a file here'; }
+  if(local){ $('#webnote').hidden=true; $('#brand').hidden=false; $('#load').disabled=false; $('#url').disabled=false; }
+  else{ $('#webnote').hidden=false; $('#load').disabled=true; $('#url').disabled=true; $('#url').placeholder='YouTube → MIDI runs in the MIDIfy local app — choose a file here'; }
 })();
 </script>
 </body></html>
