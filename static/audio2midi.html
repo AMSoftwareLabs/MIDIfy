@@ -17,10 +17,11 @@
   .filebtn{color:var(--dim)} .filebtn input{display:none}
   .webnote{background:rgba(110,168,254,.10);border:1px solid rgba(110,168,254,.45);border-radius:12px;padding:12px 14px;margin-bottom:14px;font-size:14px}
   .status{color:var(--dim);font-size:13px;margin:12px 2px 0;min-height:18px}
-  .lbl{color:var(--dim);font-size:13px} .mini{flex:0 0 auto;width:96px;min-width:0}
+  .lbl{color:var(--dim);font-size:13px} input[type=text].mini{flex:0 0 auto;width:118px;min-width:0;font-variant-numeric:tabular-nums}
   #preview{margin-top:14px} #preview[hidden]{display:none}
   canvas#wave{width:100%;height:130px;display:block;border:1px solid var(--line);border-radius:10px;background:#0d1015;cursor:crosshair;touch-action:none}
   .transport{display:flex;gap:10px;align-items:center;margin:12px 0 4px;flex-wrap:wrap}
+  .rangebar{margin-top:2px}
   .time{color:var(--dim);font-variant-numeric:tabular-nums;font-size:13px;margin-left:auto}
   .bar{height:6px;background:#0d1015;border:1px solid var(--line);border-radius:4px;overflow:hidden;margin-top:12px}
   .bar>i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--accent2));transition:width .2s}
@@ -32,6 +33,7 @@
   .result{margin-top:16px;padding:14px;border:1px solid var(--line);border-radius:12px;background:var(--panel2);display:none}
   .result.show{display:block} .result b{color:var(--accent2)}
   .foot{color:var(--dim);font-size:12px;margin-top:16px;line-height:1.6} a{color:var(--accent)}
+  kbd{background:#0d1015;border:1px solid var(--line);border-radius:5px;padding:0 5px;font:inherit;font-size:11px;color:var(--text)}
 </style></head>
 <body>
 <div class="wrap">
@@ -56,12 +58,17 @@
         <button id="play">▶ Play</button>
         <button id="playsel" title="Play just the selected range">▶ Selection</button>
         <button id="loop" class="toggle" title="Loop the selection">🔁 Loop</button>
+        <span class="time"><span id="cur">0:00.000</span> / <span id="dur">0:00</span></span>
+      </div>
+      <div class="transport rangebar">
         <span class="lbl">Range</span>
-        <input type="text" id="from" class="mini" placeholder="from m:ss">
+        <input type="text" id="from" class="mini" title="Start of the selection (m:ss.mmm). Type an exact time, or click and nudge with ↑/↓ (Shift = 0.1s)." placeholder="m:ss.mmm">
+        <button id="fromhere" title="Set the start (From) to the current playhead position">⇤ here</button>
         <span class="lbl">→</span>
-        <input type="text" id="to" class="mini" placeholder="to m:ss">
+        <input type="text" id="to" class="mini" title="End of the selection (m:ss.mmm). Type an exact time, or click and nudge with ↑/↓ (Shift = 0.1s)." placeholder="m:ss.mmm">
+        <button id="tohere" title="Set the end (To) to the current playhead position">here ⇥</button>
         <button id="whole" title="Select the whole clip">whole</button>
-        <span class="time"><span id="cur">0:00</span> / <span id="dur">0:00</span></span>
+        <span class="lbl" id="sellen" title="Length of the selection">len 0:00.000</span>
       </div>
       <button class="primary" id="go" style="margin-top:6px">🎼 Transcribe selection → MIDI</button>
     </div>
@@ -84,8 +91,10 @@
 
     <p class="foot">
       Powered by Spotify's open-source <b>Basic Pitch</b>, running entirely in your browser. Best on vocals or a single
-      instrument; dense full mixes come out messier. Drag the handles (or type the boxes) to pick a short, clean
-      section — it transcribes faster and better. First run loads the model (a few seconds).
+      instrument; dense full mixes come out messier. Drag the handles to rough-in a section, then fine-tune the
+      <b>From/To</b> boxes (shown as m:ss.mmm): type an exact time, click a box and nudge with <kbd>↑</kbd>/<kbd>↓</kbd>
+      (hold <kbd>Shift</kbd> for 0.1&nbsp;s), or play to a spot and hit <b>here</b> to snap an edge to the playhead.
+      First run loads the model (a few seconds).
     </p>
   </div>
 </div>
@@ -101,6 +110,10 @@ const status=m=>$('#status').textContent=m;
 const setBar=p=>$('#pbar').style.width=Math.round((p||0)*100)+'%';
 const clean=s=>(s||'transcription').replace(/[^\w\- ]/g,'').trim().slice(0,60)||'transcription';
 const fmtT=t=>{ t=Math.max(0,t||0); return Math.floor(t/60)+':'+String(Math.floor(t%60)).padStart(2,'0'); };
+// m:ss.mmm — minutes : seconds . milliseconds, for the selection points + playhead
+const fmtMs=t=>{ let ms=Math.round(Math.max(0,t||0)*1000), m=Math.floor(ms/60000); ms-=m*60000; let s=Math.floor(ms/1000); ms-=s*1000;
+  return m+':'+String(s).padStart(2,'0')+'.'+String(ms).padStart(3,'0'); };
+// accepts m:ss.mmm, ss.mmm, or plain seconds
 const parseTime=s=>{ s=(s||'').trim(); if(!s) return null; if(s.includes(':')){ const p=s.split(':'); return (+p[0]||0)*60+(+p[1]||0); } return +s||0; };
 
 $('#onset').oninput=e=>$('#onv').textContent=(+e.target.value).toFixed(2);
@@ -133,7 +146,7 @@ async function loadClip(file){
   }catch(e){ status('❌ Could not decode that file (try Chrome/Edge): '+e.message); return; }
   audioEl=new Audio(url); audioEl.preload='auto';
   dur=decoded.duration; from=0; to=dur;
-  $('#dur').textContent=fmtT(dur); $('#cur').textContent='0:00';
+  $('#dur').textContent=fmtT(dur); $('#cur').textContent=fmtMs(0);
   $('#preview').hidden=false;
   const cv=$('#wave'); cv.width=Math.max(320, cv.clientWidth||760);   // 1:1 pixels for clean mouse mapping
   syncInputs(); drawWave();
@@ -158,10 +171,20 @@ function drawWave(){
   g.fillStyle='#7ee0c0'; g.fillRect(fx-1,0,2,H); g.fillRect(tx-1,0,2,H); // handles
   if(audioEl){ const px=(audioEl.currentTime/dur)*W; g.fillStyle='#fff'; g.fillRect(px,0,1,H); }
 }
-function syncInputs(){ $('#from').value=fmtT(from); $('#to').value=fmtT(to); }
-$('#from').onchange=()=>{ let t=parseTime($('#from').value); from=(t==null?0:Math.max(0,Math.min(t,to-0.05))); syncInputs(); drawWave(); };
-$('#to').onchange=()=>{ let t=parseTime($('#to').value); to=(t==null?dur:Math.min(dur,Math.max(t,from+0.05))); syncInputs(); drawWave(); };
+function syncInputs(){ $('#from').value=fmtMs(from); $('#to').value=fmtMs(to); $('#sellen').textContent='len '+fmtMs(Math.max(0,to-from)); }
+$('#from').onchange=()=>{ let t=parseTime($('#from').value); from=(t==null?0:Math.max(0,Math.min(t,to-0.02))); syncInputs(); drawWave(); };
+$('#to').onchange=()=>{ let t=parseTime($('#to').value); to=(t==null?dur:Math.min(dur,Math.max(t,from+0.02))); syncInputs(); drawWave(); };
 $('#whole').onclick=()=>{ from=0; to=dur; syncInputs(); drawWave(); };
+$('#fromhere').onclick=()=>{ if(!audioEl) return; from=Math.max(0,Math.min(audioEl.currentTime,to-0.02)); syncInputs(); drawWave(); };
+$('#tohere').onclick=()=>{ if(!audioEl) return; to=Math.min(dur,Math.max(audioEl.currentTime,from+0.02)); syncInputs(); drawWave(); };
+
+// fine-tune: focus a box and nudge with ↑/↓ (Shift = 0.1s)
+function nudge(id,d){ if(!decoded) return;
+  if(id==='from') from=Math.max(0,Math.min(from+d,to-0.02)); else to=Math.min(dur,Math.max(to+d,from+0.02));
+  syncInputs(); drawWave(); }
+['from','to'].forEach(id=>$('#'+id).addEventListener('keydown',e=>{
+  if(e.key==='ArrowUp'||e.key==='ArrowDown'){ e.preventDefault(); nudge(id,(e.shiftKey?0.1:0.01)*(e.key==='ArrowUp'?1:-1)); }
+}));
 
 (function wireCanvas(){
   const cv=$('#wave');
@@ -175,16 +198,16 @@ $('#whole').onclick=()=>{ from=0; to=dur; syncInputs(); drawWave(); };
   window.addEventListener('mousemove', e=>{
     if(!drag||!decoded) return;
     const t=xToT(e.clientX);
-    if(drag==='from') from=Math.max(0,Math.min(t,to-0.05));
-    else to=Math.min(dur,Math.max(t,from+0.05));
+    if(drag==='from') from=Math.max(0,Math.min(t,to-0.02));
+    else to=Math.min(dur,Math.max(t,from+0.02));
     syncInputs(); drawWave();
   });
   window.addEventListener('mouseup', ()=>{ drag=null; });
 })();
 
 // ── playback ────────────────────────────────────────────────────────────────────
-function seekTo(t){ if(audioEl){ audioEl.currentTime=Math.max(0,Math.min(t,dur)); drawWave(); } }
-function tick(){ if(!audioEl) return; $('#cur').textContent=fmtT(audioEl.currentTime); drawWave();
+function seekTo(t){ if(audioEl){ audioEl.currentTime=Math.max(0,Math.min(t,dur)); $('#cur').textContent=fmtMs(audioEl.currentTime); drawWave(); } }
+function tick(){ if(!audioEl) return; $('#cur').textContent=fmtMs(audioEl.currentTime); drawWave();
   if(audioEl._sel && audioEl.currentTime>=to){ if(loopSel){ audioEl.currentTime=from; } else { stopPlay(); return; } }
   raf=requestAnimationFrame(tick);
 }
@@ -208,14 +231,14 @@ async function transcribe(){
     const src=off.createBufferSource(); src.buffer=decoded; src.connect(off.destination); src.start(0, from, secs);
     const mono=await off.startRendering();
     status('Loading model…'); if(!bp) bp=new BasicPitch(MODEL);
-    status(ranged ? `Transcribing ${fmtT(from)}–${fmtT(to)}… (first run warms up the model)` : 'Transcribing… (first run warms up the model)');
+    status(ranged ? `Transcribing ${fmtMs(from)}–${fmtMs(to)}… (first run warms up the model)` : 'Transcribing… (first run warms up the model)');
     const frames=[],onsets=[],contours=[];
     await bp.evaluateModel(mono, (f,o,c)=>{frames.push(...f);onsets.push(...o);contours.push(...c);}, p=>setBar(p));
     const notes=noteFramesToTime(addPitchBendsToNoteEvents(contours,
       outputToNotesPoly(frames, onsets, +$('#onset').value, +$('#frame').value, Math.round(+$('#minlen').value/1000*(22050/256)))));
     lastMidiBlob=notesToMidi(notes);
     $('#rcount').textContent=notes.length; $('#result').classList.add('show');
-    status(`Done — ${notes.length} notes${ranged?` from ${fmtT(from)}–${fmtT(to)}`:''}. Download the .mid below.`); setBar(1);
+    status(`Done — ${notes.length} notes${ranged?` from ${fmtMs(from)}–${fmtMs(to)}`:''}. Download the .mid below.`); setBar(1);
   }catch(e){ status('❌ '+e.message); }
 }
 
