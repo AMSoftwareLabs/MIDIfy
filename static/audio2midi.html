@@ -76,11 +76,14 @@
     <div class="bar"><i id="pbar"></i></div>
 
     <div class="knobs">
-      <div class="knob"><label>Note onset <span class="val" id="onv">0.50</span></label>
+      <div class="knob" title="How clear a note's attack must be. Higher = fewer, cleaner notes; lower = catches more.">
+        <label>Note onset <span class="val" id="onv">0.50</span></label>
         <input id="onset" type="range" min="0.05" max="0.9" step="0.05" value="0.5"></div>
-      <div class="knob"><label>Note confidence <span class="val" id="frv">0.30</span></label>
+      <div class="knob" title="How sure the model must be to keep a note. Higher = stricter (fewer notes). If you get too few or none, LOWER this.">
+        <label>Note confidence <span class="val" id="frv">0.30</span></label>
         <input id="frame" type="range" min="0.05" max="0.9" step="0.05" value="0.3"></div>
-      <div class="knob"><label>Min length (ms) <span class="val" id="mlv">110</span></label>
+      <div class="knob" title="Ignore notes shorter than this, to drop blips.">
+        <label>Min length (ms) <span class="val" id="mlv">110</span></label>
         <input id="minlen" type="range" min="30" max="400" step="10" value="110"></div>
     </div>
 
@@ -236,6 +239,11 @@ async function transcribe(){
     await bp.evaluateModel(mono, (f,o,c)=>{frames.push(...f);onsets.push(...o);contours.push(...c);}, p=>setBar(p));
     const notes=noteFramesToTime(addPitchBendsToNoteEvents(contours,
       outputToNotesPoly(frames, onsets, +$('#onset').value, +$('#frame').value, Math.round(+$('#minlen').value/1000*(22050/256)))));
+    if(notes.length===0){                                  // empty transcription → don't offer a broken .mid
+      lastMidiBlob=null; $('#result').classList.remove('show'); setBar(0);
+      status('Found 0 notes here — lower "Note confidence" (try 0.30 or less), maybe "Note onset" too, or pick a spot with a clear solo vocal/melody. Dense full mixes often transcribe to nothing.');
+      return;
+    }
     lastMidiBlob=notesToMidi(notes);
     $('#rcount').textContent=notes.length; $('#result').classList.add('show');
     status(`Done — ${notes.length} notes${ranged?` from ${fmtMs(from)}–${fmtMs(to)}`:''}. Download the .mid below.`); setBar(1);
