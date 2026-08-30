@@ -18,6 +18,8 @@
   .webnote{background:rgba(110,168,254,.10);border:1px solid rgba(110,168,254,.45);border-radius:12px;padding:12px 14px;margin-bottom:14px;font-size:14px}
   .status{color:var(--dim);font-size:13px;margin:12px 2px 0;min-height:18px}
   .lbl{color:var(--dim);font-size:13px} input[type=text].mini{flex:0 0 auto;width:118px;min-width:0;font-variant-numeric:tabular-nums}
+  select{background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:10px;padding:9px 11px;cursor:pointer;max-width:240px}
+  select:hover{border-color:var(--accent)}
   #preview{margin-top:14px} #preview[hidden]{display:none}
   canvas#wave{width:100%;height:130px;display:block;border:1px solid var(--line);border-radius:10px;background:#0d1015;cursor:crosshair;touch-action:none}
   .transport{display:flex;gap:10px;align-items:center;margin:12px 0 4px;flex-wrap:wrap}
@@ -70,7 +72,16 @@
         <button id="whole" title="Select the whole clip">whole</button>
         <span class="lbl" id="sellen" title="Length of the selection">len 0:00.000</span>
       </div>
+      <div class="transport sourcerow" id="sourcerow" hidden>
+        <span class="lbl">Convert</span>
+        <select id="source" title="Whole mix, or isolate one part first (local only; needs setup_stems.bat)">
+          <option value="whole">Whole clip (full mix)</option>
+        </select>
+        <span class="lbl" id="astrack" hidden>→ name</span>
+        <input type="text" id="trackname" class="mini" title="Optional MIDI track name; known instrument names map to a General MIDI voice (e.g. Sitar → GM 104)." placeholder="e.g. Sitar" hidden>
+      </div>
       <button class="primary" id="go" style="margin-top:6px">🎼 Transcribe selection → MIDI</button>
+      <div class="status" id="stemhint" hidden>🎚 To isolate <b>vocals / bass / guitar / piano / other</b> before transcribing, run <b>setup_stems.bat</b> once (optional, local only).</div>
     </div>
 
     <div class="bar"><i id="pbar"></i></div>
@@ -118,6 +129,16 @@ const fmtMs=t=>{ let ms=Math.round(Math.max(0,t||0)*1000), m=Math.floor(ms/60000
   return m+':'+String(s).padStart(2,'0')+'.'+String(ms).padStart(3,'0'); };
 // accepts m:ss.mmm, ss.mmm, or plain seconds
 const parseTime=s=>{ s=(s||'').trim(); if(!s) return null; if(s.includes(':')){ const p=s.split(':'); return (+p[0]||0)*60+(+p[1]||0); } return +s||0; };
+// General MIDI voice per stem, and by typed name, so an isolated part exports as a sensible instrument
+const GM_BY_STEM={vocals:85, bass:33, guitar:27, piano:0, other:48};
+const GM_BY_NAME={sitar:104, veena:104, tanpura:104, koto:107, shamisen:106, banjo:105, flute:73, bansuri:73,
+  sarangi:110, shehnai:111, harmonium:21, accordion:21, organ:19, violin:40, cello:42, strings:48, choir:52,
+  sax:65, trumpet:56, synth:80, pad:88, guitar:27, piano:0, bass:33, vocal:85, vocals:85};
+function gmProgram(source, name){
+  const n=(name||'').toLowerCase().trim();
+  for(const k in GM_BY_NAME){ if(n && n.includes(k)) return GM_BY_NAME[k]; }
+  return (source in GM_BY_STEM) ? GM_BY_STEM[source] : 0;
+}
 
 $('#onset').oninput=e=>$('#onv').textContent=(+e.target.value).toFixed(2);
 $('#frame').oninput=e=>$('#frv').textContent=(+e.target.value).toFixed(2);
@@ -225,33 +246,76 @@ $('#loop').onclick=()=>{ loopSel=!loopSel; $('#loop').classList.toggle('on',loop
 $('#dl').onclick=()=>{ if(!lastMidiBlob) return; const a=document.createElement('a'); a.href=URL.createObjectURL(lastMidiBlob); a.download=lastName+'.mid'; a.click(); };
 $('#go').onclick=transcribe;
 
+// render a slice of an AudioBuffer into a new one (OfflineAudioContext resamples to sr, down/upmixes to channels)
+async function renderBuf(buf, a, b, channels, sr){
+  const secs=Math.max(0.05,(b==null?buf.duration:b)-a);
+  const off=new OfflineAudioContext(channels, Math.max(1,Math.ceil(secs*sr)), sr);
+  const s=off.createBufferSource(); s.buffer=buf; s.connect(off.destination); s.start(0,a,secs);
+  return off.startRendering();
+}
+// encode an AudioBuffer as a 16-bit PCM WAV Blob (to POST to the local separator)
+function bufferToWav(buf){
+  const nch=buf.numberOfChannels, len=buf.length, sr=buf.sampleRate, bytes=44+len*nch*2;
+  const ab=new ArrayBuffer(bytes), dv=new DataView(ab); let p=0;
+  const ws=s=>{for(let i=0;i<s.length;i++)dv.setUint8(p++,s.charCodeAt(i));};
+  const w16=v=>{dv.setUint16(p,v,true);p+=2;}, w32=v=>{dv.setUint32(p,v,true);p+=4;};
+  ws('RIFF');w32(bytes-8);ws('WAVE');ws('fmt ');w32(16);w16(1);w16(nch);w32(sr);w32(sr*nch*2);w16(nch*2);w16(16);ws('data');w32(len*nch*2);
+  const ch=[]; for(let c=0;c<nch;c++) ch.push(buf.getChannelData(c));
+  for(let i=0;i<len;i++) for(let c=0;c<nch;c++){ let v=Math.max(-1,Math.min(1,ch[c][i])); dv.setInt16(p, v<0?v*0x8000:v*0x7FFF, true); p+=2; }
+  return new Blob([ab],{type:'audio/wav'});
+}
+// isolate one stem via the local server (Demucs) → decoded AudioBuffer of just that part
+async function isolateStem(stem){
+  status(`Separating "${stem}" from the mix… first run loads the model; on CPU this can take a minute.`); setBar(0);
+  const wav=bufferToWav(await renderBuf(decoded, from, to, 2, decoded.sampleRate||44100));   // Demucs wants stereo
+  const fd=new FormData(); fd.append('audio', wav, 'clip.wav');
+  const r=await fetch('/api/separate?stem='+encodeURIComponent(stem),{method:'POST',body:fd});
+  const j=await r.json().catch(()=>({})); if(!r.ok) throw new Error(j.error||'separation failed');
+  const abuf=await (await fetch(j.stemUrl)).arrayBuffer();
+  const ac=new (window.AudioContext||window.webkitAudioContext)();
+  return ac.decodeAudioData(abuf);
+}
+// show/hide the track-name box when an instrument is chosen, and prefill a sensible default
+if($('#source')) $('#source').onchange=()=>{ const stem=$('#source').value!=='whole';
+  $('#astrack').hidden=!stem; $('#trackname').hidden=!stem;
+  if(stem && !$('#trackname').value){ const d={vocals:'Vocals',bass:'Bass',guitar:'Guitar',piano:'Piano',other:''}; $('#trackname').value=d[$('#source').value]||''; }
+};
+
 async function transcribe(){
   if(!decoded){ status('Load a clip first.'); return; }
   stopPlay(); $('#result').classList.remove('show'); setBar(0);
+  const source=($('#source') ? $('#source').value : 'whole');
+  const ranged=(from>0||to<dur-0.01);
   try{
-    const secs=Math.max(0.05, to-from), ranged=(from>0||to<dur-0.01);
-    const off=new OfflineAudioContext(1, Math.max(1,Math.ceil(secs*22050)), 22050);   // render only [from,to] at 22050 mono
-    const src=off.createBufferSource(); src.buffer=decoded; src.connect(off.destination); src.start(0, from, secs);
-    const mono=await off.startRendering();
+    let mono;                                              // mono 22050 buffer fed to Basic Pitch
+    if(source==='whole'){
+      mono=await renderBuf(decoded, from, to, 1, 22050);   // render only [from,to]
+    }else{
+      const stemBuf=await isolateStem(source);             // Demucs isolates the chosen part (the stem IS the [from,to] slice)
+      mono=await renderBuf(stemBuf, 0, null, 1, 22050);
+    }
     status('Loading model…'); if(!bp) bp=new BasicPitch(MODEL);
-    status(ranged ? `Transcribing ${fmtMs(from)}–${fmtMs(to)}… (first run warms up the model)` : 'Transcribing… (first run warms up the model)');
+    status(`Transcribing${source!=='whole'?' the '+source:''}${ranged?` ${fmtMs(from)}–${fmtMs(to)}`:''}… (first run warms up the model)`);
     const frames=[],onsets=[],contours=[];
     await bp.evaluateModel(mono, (f,o,c)=>{frames.push(...f);onsets.push(...o);contours.push(...c);}, p=>setBar(p));
     const notes=noteFramesToTime(addPitchBendsToNoteEvents(contours,
       outputToNotesPoly(frames, onsets, +$('#onset').value, +$('#frame').value, Math.round(+$('#minlen').value/1000*(22050/256)))));
     if(notes.length===0){                                  // empty transcription → don't offer a broken .mid
       lastMidiBlob=null; $('#result').classList.remove('show'); setBar(0);
-      status('Found 0 notes here — lower "Note confidence" (try 0.30 or less), maybe "Note onset" too, or pick a spot with a clear solo vocal/melody. Dense full mixes often transcribe to nothing.');
+      status(`Found 0 notes${source!=='whole'?` in the isolated ${source}`:''} — lower "Note confidence" (try 0.30 or less), maybe "Note onset" too${source==='whole'?', or isolate one instrument via Source':', or pick a spot where it plays clearly'}.`);
       return;
     }
-    lastMidiBlob=notesToMidi(notes);
+    const tname=($('#trackname') && $('#trackname').value.trim()) || (source==='whole' ? '' : source);
+    lastMidiBlob=notesToMidi(notes, tname, source==='whole' ? null : gmProgram(source, tname));
     $('#rcount').textContent=notes.length; $('#result').classList.add('show');
-    status(`Done — ${notes.length} notes${ranged?` from ${fmtMs(from)}–${fmtMs(to)}`:''}. Download the .mid below.`); setBar(1);
+    status(`Done — ${notes.length} notes${source!=='whole'?` (${tname||source})`:''}${ranged?` from ${fmtMs(from)}–${fmtMs(to)}`:''}. Download the .mid below.`); setBar(1);
   }catch(e){ status('❌ '+e.message); }
 }
 
-function notesToMidi(notes){
+function notesToMidi(notes, name, program){
   const midi=new Midi(); const tr=midi.addTrack();
+  if(name) tr.name=name;
+  if(program!=null){ try{ tr.instrument.number=program; }catch(e){} }
   for(const n of notes) tr.addNote({ midi:n.pitchMidi, time:n.startTimeSeconds,
     duration:Math.max(0.05,n.durationSeconds), velocity:Math.max(0.1,Math.min(1,n.amplitude||0.7)) });
   return new Blob([midi.toArray()],{type:'audio/midi'});
@@ -259,9 +323,16 @@ function notesToMidi(notes){
 
 // Local (MIDIfy app) vs in-app/web: only the local app has /api/extract → enable the YouTube box there.
 (async()=>{
-  let local=false;
-  try{ const r=await fetch('/api/health',{cache:'no-store'}); if(r.ok){ const j=await r.json().catch(()=>null); local=!!(j&&j.ok); } }catch(e){}
-  if(local){ $('#webnote').hidden=true; $('#brand').hidden=false; $('#load').disabled=false; $('#url').disabled=false; }
+  let health=null;
+  try{ const r=await fetch('/api/health',{cache:'no-store'}); if(r.ok) health=await r.json().catch(()=>null); }catch(e){}
+  const local=!!(health && health.ok);
+  if(local){ $('#webnote').hidden=true; $('#brand').hidden=false; $('#load').disabled=false; $('#url').disabled=false;
+    if(health.stems && Array.isArray(health.stemNames) && health.stemNames.length){
+      const sel=$('#source'), label={vocals:'Vocals',bass:'Bass',guitar:'Guitar',piano:'Piano',other:'Other (sitar/veena/synth…)'};
+      for(const s of health.stemNames){ const o=document.createElement('option'); o.value=s; o.textContent='Isolate: '+(label[s]||s); sel.appendChild(o); }
+      $('#sourcerow').hidden=false;
+    } else { $('#stemhint').hidden=false; }        // local but Demucs not installed → hint to run setup_stems.bat
+  }
   else{ $('#webnote').hidden=false; $('#load').disabled=true; $('#url').disabled=true; $('#url').placeholder='YouTube → MIDI runs in the MIDIfy local app — choose a file here'; }
 })();
 </script>
