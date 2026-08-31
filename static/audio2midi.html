@@ -60,6 +60,7 @@
         <button id="play">▶ Play</button>
         <button id="playsel" title="Play just the selected range">▶ Selection</button>
         <button id="loop" class="toggle" title="Loop the selection">🔁 Loop</button>
+        <button id="dlaudio" title="Download the loaded audio as a .wav">⬇ Audio</button>
         <span class="time"><span id="cur">0:00.000</span> / <span id="dur">0:00</span></span>
       </div>
       <div class="transport rangebar">
@@ -241,6 +242,9 @@ function stopPlay(){ if(audioEl){ audioEl.pause(); audioEl._sel=false; } $('#pla
 $('#play').onclick=()=>{ if(!audioEl) return; if(audioEl.paused) play(false); else stopPlay(); };
 $('#playsel').onclick=()=>play(true);
 $('#loop').onclick=()=>{ loopSel=!loopSel; $('#loop').classList.toggle('on',loopSel); };
+$('#dlaudio').onclick=()=>{ if(!decoded) return; const wav=bufferToWav(decoded);   // save the loaded source audio
+  const a=document.createElement('a'); a.href=URL.createObjectURL(wav); a.download=(lastName||'audio')+'.wav';
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),8000); };
 
 // ── transcribe the selected range ────────────────────────────────────────────────
 $('#dl').onclick=()=>{ if(!lastMidiBlob) return; const a=document.createElement('a'); a.href=URL.createObjectURL(lastMidiBlob); a.download=lastName+'.mid'; a.click(); };
