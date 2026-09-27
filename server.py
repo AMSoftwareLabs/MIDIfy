@@ -80,10 +80,13 @@ def api_extract():
 def api_separate():
     if not _stems_available():
         return jsonify(error="Stem isolation isn't installed on this machine — run setup_stems.bat once."), 501
+    stem = (request.args.get("stem") or "vocals").strip().lower()
+    if stem not in STEM_NAMES:                              # only the stems we offer — never a path, and a bad name
+        return jsonify(error="That isn't a stem MIDIfy offers — choose "      # mustn't cost a full Demucs run first
+                             + ", ".join(STEM_NAMES) + "."), 400
     f = request.files.get("audio")
     if f is None:
         return jsonify(error="No audio was uploaded to separate."), 400
-    stem = (request.args.get("stem") or "vocals").strip().lower()
     data = f.read()
     h = hashlib.md5(data).hexdigest()                       # cache stems by the clip's bytes → re-tries are instant
     out_dir = os.path.join(CACHE, "stems", h)

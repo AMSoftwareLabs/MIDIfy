@@ -15,6 +15,7 @@ extract() tries a cookies.txt (dropped in the app folder) across several clients
 browser cookies and plain clients. Each attempt is printed to the console so you can see what got through.
 """
 import os, re, sys
+from urllib.parse import urlparse
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")     # strip yt-dlp's coloured error text before showing it
 _FMT = {
@@ -51,7 +52,18 @@ _COOKIE_CLIENTS = (["android_vr"], ["android"], ["ios"], ["tv"], ["mweb"], ["web
 
 
 def is_youtube(url):
-    return bool(re.search(r"(?:youtube\.com/|youtu\.be/|music\.youtube\.com/)", url or "", re.I))
+    """True only when the link's HOST is YouTube: youtube.com or any subdomain of it (www., m., music.), or youtu.be.
+    (Searching for "youtube.com/" anywhere in the text let https://attacker.com/youtube.com/x through.) A pasted
+    link without a scheme — "youtu.be/…", "www.youtube.com/…" — is read as https."""
+    u = (url or "").strip()
+    if not re.match(r"[a-z][a-z0-9+.-]*://", u, re.I):
+        u = "https://" + u
+    try:
+        p = urlparse(u)
+        host = (p.hostname or "").lower()
+    except ValueError:                                  # malformed, e.g. an unclosed "[" in the host part
+        return False
+    return p.scheme in ("http", "https") and (host in ("youtube.com", "youtu.be") or host.endswith(".youtube.com"))
 
 
 def _label(extra):

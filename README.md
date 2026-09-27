@@ -59,3 +59,5 @@ different, non-pitch method). Not available in the web version.
   MIDI transcription still reproduces the *composition*, so this is for personal practice/study, your call. Kept local
   on purpose (YouTube blocks cloud IPs anyway).
 - Shares its YouTube extractor (`yt_extract.py`) with the KaraoKey tool — same code, two separate apps.
+- **Self-test:** `py -3 selftest.py` checks the server's input guards (YouTube-only links, known stem names) —
+  no YouTube, Demucs or browser needed.
